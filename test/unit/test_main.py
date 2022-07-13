@@ -68,6 +68,68 @@ def test_base_image_via_build_args(exec_env_definition_file, tmp_path):
     assert 'EE_BASE_IMAGE' in content  # TODO: should we make user value default?
 
 
+def test_secret_ssh_and_mount_dockerfile(exec_env_definition_file, galaxy_requirements_file, tmp_path):
+    # put some galaxy dependencies to have more than one `RUN` directive
+    galaxy_requirements_content = {
+        'collections': [
+            {'name': 'geerlingguy.php_roles', 'version': '0.9.3', 'source': 'https://galaxy.ansible.com'}
+        ]
+    }
+    galaxy_requirements_path = galaxy_requirements_file(galaxy_requirements_content)
+    exec_env_content = {
+        'version': 3,
+        'dependencies': {
+            'galaxy': str(galaxy_requirements_path)
+        }
+    }
+    exec_env_path = exec_env_definition_file(content=exec_env_content)
+    mounts = ['type=ssh', 'type=secret,id=foo']
+
+    aee = AnsibleBuilder(
+        action='create',
+        filename=exec_env_path,
+        build_context=str(tmp_path / 'bc'),
+        mounts=mounts,
+    )
+    aee.build()
+
+    mount_args = " ".join([f"--mount={x}" for x in mounts])
+    run_cmds = []
+    run_cmds_with_mounts = []
+    with open(aee.containerfile.path) as f:
+        while True:
+            line = f.readline()
+            if not line:
+                break
+            if line.startswith('RUN '):
+                run_cmds.append(line)
+            if line.startswith(f"RUN {mount_args}"):
+                run_cmds_with_mounts.append(line)
+
+    assert run_cmds_with_mounts
+    assert run_cmds == run_cmds_with_mounts
+
+
+@pytest.mark.test_all_runtimes
+def test_secret_ssh_and_mount_command(exec_env_definition_file, runtime):
+    content = {'version': 3}
+    path = exec_env_definition_file(content=content)
+
+    secrets = ['id=foo,env=BAR', 'id=netrc,src=.netrc-for-github']
+    ssh_sockets = ['main=$SSH_AUTH_SOCK', 'other=$OTHER_SSH_AUTH_SOCK']
+    aee = AnsibleBuilder(
+        action='create',
+        filename=path,
+        container_runtime=runtime,
+        secrets=secrets,
+        ssh_sockets=ssh_sockets,
+    )
+    command = aee.build_command
+
+    assert " ".join(f"--secret={x}" for x in secrets) in " ".join(command)
+    assert " ".join(f"--ssh={x}" for x in ssh_sockets) in " ".join(command)
+
+
 def test_base_image_via_definition_file_build_arg(exec_env_definition_file, tmp_path):
     content = {
         'version': 1,

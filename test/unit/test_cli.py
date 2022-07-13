@@ -372,3 +372,60 @@ def test_invalid_verbosity(exec_env_definition_file, tmp_path, verbosity_opt):
     path = str(exec_env_definition_file(content=content))
     with pytest.raises(ValueError, match=f'maximum verbosity is {constants.max_verbosity}'):
         prepare(['create', '-f', path, '-c', str(tmp_path), verbosity_opt])
+
+
+def test_secret_ssh_and_mount_are_falsy(good_exec_env_definition_path, tmp_path):
+    path = str(good_exec_env_definition_path)
+    build_context = str(tmp_path)
+
+    aee = prepare(['build', '-f', path, '-c', build_context])
+    assert not aee.secrets
+    assert not aee.ssh_sockets
+    assert not aee.containerfile.mounts
+
+
+def test_secret_ssh_and_mount(good_exec_env_definition_path, tmp_path):
+    path = str(good_exec_env_definition_path)
+    build_context = str(tmp_path)
+
+    secrets = [
+        '--secret', 'id=netrc,src=.netrc-for-github',
+        '--secret', 'id=foo,env=BAR']
+
+    ssh_sockets = [
+        '--ssh', 'main=$SSH_AUTH_SOCK',
+        '--ssh', 'other=$OTHER_SSH_AUTH_SOCK']
+
+    mounts = [
+        '--mount', 'type=secret,id=netrc,dst=/root/.netrc',
+        '--mount', 'type=secret,id=foo,dst=/root/.password',
+        '--mount', 'type=type=ssh,id=main',
+        '--mount', 'type=type=ssh,id=other']
+
+    default_args = ['build', '-f', path, '-c', build_context]
+
+    aee = prepare(default_args + secrets + ssh_sockets + mounts)
+    assert aee.secrets == [x for x in secrets if x != '--secret']
+    assert aee.ssh_sockets == [x for x in ssh_sockets if x != '--ssh']
+    assert aee.containerfile.mounts == " ".join(f"--mount={x}" for x in mounts if x != '--mount')
+
+
+def test_secret_ssh_and_mount_works_with_create_args(good_exec_env_definition_path, tmp_path):
+    path = str(good_exec_env_definition_path)
+    build_context = str(tmp_path)
+
+    aee = prepare(['create', '-f', path, '-c', build_context, '--mount', 'type=ssh'])
+    assert aee.containerfile.mounts == '--mount=type=ssh'
+
+
+def test_secret_ssh_and_mount_fails_with_build_args(good_exec_env_definition_path, tmp_path, capsys):
+    path = str(good_exec_env_definition_path)
+    build_context = str(tmp_path)
+
+    bad_args = ['--ssh', 'default', '--secret', 'id=foo,src=bar']
+
+    with pytest.raises(SystemExit):
+        prepare(['create', '-f', path, '-c', build_context] + bad_args)
+
+    captured = capsys.readouterr()
+    assert f"unrecognized arguments: {' '.join(bad_args)}\n" in captured.err
